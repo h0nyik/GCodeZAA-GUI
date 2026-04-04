@@ -1,4 +1,44 @@
-# GCodeZAA
+# GCodeZAA — GUI Fork
+
+> **This is a fork of [Theaninova/GCodeZAA](https://github.com/Theaninova/GCodeZAA)**
+> adding a graphical user interface (GUI) and pre-built installers for macOS, Windows and Linux.
+> All credit for the core ZAA algorithm goes to the original author.
+
+## Downloads
+
+| Platform | File |
+|----------|------|
+| macOS Apple Silicon (M1/M2/M3/M4) | `GCodeZAA-macos-arm64.dmg` |
+| macOS Intel | `GCodeZAA-macos-x64.dmg` |
+| Windows 10/11 x64 | `GCodeZAA-windows-x64-Setup.exe` |
+| Linux x86_64 | `GCodeZAA-linux-x64.AppImage` |
+| Linux ARM64 (Raspberry Pi 4/5) | `GCodeZAA-linux-arm64.AppImage` |
+
+👉 **[Latest release](https://github.com/h0nyik/GCodeZAA/releases/latest)**
+
+## What's new in this fork
+
+- **Graphical user interface** — drag & drop G-code, select STL folder, one-click processing
+- **Pre-built installers** — no Python setup required, download and run
+- **Log panel** — real-time processing output with color coding
+- **G-code analyzer** — instant slicer detection, layer count, object count
+- **Multi-platform CI** — GitHub Actions builds for every release
+
+## GUI Usage
+
+1. Download and install the package for your platform above
+2. Launch **GCodeZAA**
+3. Drop your `.gcode` file into the input area (or click to browse)
+4. Set the **STL folder** — directory containing the STL files matching your print objects
+5. Click **▶ ZPRACOVAT GCODE** (Process G-code)
+
+> **Requirements:** Klipper firmware with `EXCLUDE_OBJECT_DEFINE` support.
+> OrcaSlicer recommended. STL files must be in the same folder, named to match
+> the `EXCLUDE_OBJECT_DEFINE NAME=` entries in the G-code.
+
+---
+
+# GCodeZAA (original)
 
 **UPDATES:**
 
@@ -45,7 +85,7 @@ get this implemented in slicers directly.
 - [ ] Integrate properly into OrcaSlicer
 - [ ] Arc (G2/G3) support
 
-## Usage
+## CLI Usage
 
 ### Orca Slicer + Klipper
 
