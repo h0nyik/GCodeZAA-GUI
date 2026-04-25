@@ -275,29 +275,117 @@ def fdisplay(size=14, weight="bold"):
     return ("SF Pro Display" if _IS_MAC else "Segoe UI", size, weight)
 
 
+# ── Printer bed sizes (for best_object_pos auto-detection) ────────────────────
+_BED_SIZES: dict[str, tuple[float, float]] = {
+    "Bambu Lab P1P":   (256, 256),
+    "Bambu Lab P1S":   (256, 256),
+    "Bambu Lab X1":    (256, 256),
+    "Bambu Lab X1C":   (256, 256),
+    "Bambu Lab A1":    (256, 256),
+    "Bambu Lab A1 mini": (180, 180),
+    "Prusa MK4":       (250, 210),
+    "Prusa MK3":       (250, 210),
+    "Prusa XL":        (360, 360),
+    "Creality Ender-3":(220, 220),
+    "Voron 2.4":       (300, 300),
+}
+
+def _bed_size(printer_model: str) -> tuple[float, float]:
+    for key, size in _BED_SIZES.items():
+        if key.lower() in printer_model.lower():
+            return size
+    return (256, 256)  # safe default
+
+
 # ── G-code analyzer ────────────────────────────────────────────────────────────
 def analyze_gcode(path: str) -> dict:
-    info = {"slicer": t("unknown"), "layers": 0, "objects": 0, "layer_height": "?"}
+    info = {
+        "slicer": t("unknown"), "layers": 0, "objects": 0, "layer_height": "?",
+        # auto-detect fields for single-object / Bambu mode:
+        "auto_center_x": None, "auto_center_y": None, "auto_stl_name": None,
+    }
     try:
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
+
+        # ── slicer detection ──────────────────────────────────────────────────
         for line in lines[:10]:
             if "OrcaSlicer"  in line: info["slicer"] = "OrcaSlicer";  break
             if "BambuStudio" in line: info["slicer"] = "BambuStudio"; break
             if "PrusaSlicer" in line: info["slicer"] = "PrusaSlicer"; break
-        in_cfg = False
+
+        # ── config block parsing ──────────────────────────────────────────────
+        in_cfg      = False
+        best_pos    = None   # "0.5,0.5"
+        printer_mdl = ""
+        fname_fmt   = ""
+
         for line in lines:
-            if "; CONFIG_BLOCK_START" in line: in_cfg = True;  continue
-            if "; CONFIG_BLOCK_END"   in line: in_cfg = False; continue
-            if in_cfg and line.startswith("; layer_height"):
-                try:
-                    info["layer_height"] = line.split("=")[1].strip() + " mm"
-                except Exception:
-                    pass
-            if ";LAYER_CHANGE" in line or "; CHANGE_LAYER" in line:
+            s = line.strip()
+            if "; CONFIG_BLOCK_START" in s: in_cfg = True;  continue
+            if "; CONFIG_BLOCK_END"   in s: in_cfg = False; continue
+
+            if in_cfg:
+                if s.startswith("; layer_height"):
+                    try: info["layer_height"] = s.split("=")[1].strip() + " mm"
+                    except Exception: pass
+                elif s.startswith("; best_object_pos"):
+                    try: best_pos = s.split("=")[1].strip()
+                    except Exception: pass
+                elif s.startswith("; printer_model"):
+                    try: printer_mdl = s.split("=")[1].strip()
+                    except Exception: pass
+                elif s.startswith("; filename_format"):
+                    try: fname_fmt = s.split("=")[1].strip()
+                    except Exception: pass
+
+            if ";LAYER_CHANGE" in s or "; CHANGE_LAYER" in s:
                 info["layers"] += 1
-            if "EXCLUDE_OBJECT_DEFINE" in line:
+            if "EXCLUDE_OBJECT_DEFINE" in s:
                 info["objects"] += 1
+
+        # ── auto center from best_object_pos ──────────────────────────────────
+        if best_pos and info["objects"] == 0:
+            try:
+                rx, ry   = (float(v) for v in best_pos.split(","))
+                bw, bh   = _bed_size(printer_mdl)
+                info["auto_center_x"] = round(rx * bw, 2)
+                info["auto_center_y"] = round(ry * bh, 2)
+            except Exception:
+                pass
+
+        # ── auto center from first-layer bounding box (fallback / refinement) ─
+        if info["auto_center_x"] is None and info["objects"] == 0:
+            xs, ys, first_layer_done = [], [], False
+            import re as _re
+            _G1 = _re.compile(r"^G[01]\s.*X([\d.]+).*Y([\d.]+)")
+            for line in lines:
+                if ";LAYER_CHANGE" in line or "; CHANGE_LAYER" in line:
+                    if xs:  # already have first layer data → stop
+                        first_layer_done = True
+                        break
+                if not first_layer_done:
+                    m = _G1.match(line)
+                    if m:
+                        xs.append(float(m.group(1)))
+                        ys.append(float(m.group(2)))
+            if xs and ys:
+                info["auto_center_x"] = round((min(xs) + max(xs)) / 2, 2)
+                info["auto_center_y"] = round((min(ys) + max(ys)) / 2, 2)
+
+        # ── guess STL name from gcode filename ───────────────────────────────
+        import re as _re
+        stem = Path(path).stem   # e.g. "zatka_ABS_1h16m"
+        # OrcaSlicer format: {input_filename_base}_{filament_type[0]}_{print_time}
+        # Strip trailing _<FILAMENT>_<TIME> patterns
+        cleaned = _re.sub(
+            r"_([A-Z][A-Z0-9+_]{1,12})_(\d+h\d+m|\d+m\d+s|\d+[hms])$",
+            "", stem, flags=_re.IGNORECASE)
+        if cleaned and cleaned != stem:
+            info["auto_stl_name"] = cleaned + ".stl"
+        else:
+            info["auto_stl_name"] = stem + ".stl"
+
     except Exception:
         pass
     return info
@@ -867,6 +955,22 @@ class App(ctk.CTk):
         self._slicer_badge.configure(text=f"  {slicer}  ", text_color=color)
         self._log(t("log_detected", slicer=slicer, layers=layers,
                     objects=objects, height=height), "accent")
+
+        # ── Auto-fill single-object / Bambu fields ─────────────────────────
+        if objects == 0:
+            cx = i.get("auto_center_x")
+            cy = i.get("auto_center_y")
+            stl = i.get("auto_stl_name")
+            if cx is not None and not self.pos_x.get():
+                self.pos_x.set(str(cx))
+            if cy is not None and not self.pos_y.get():
+                self.pos_y.set(str(cy))
+            if stl and not self.stl_name.get():
+                self.stl_name.set(stl)
+            if cx is not None:
+                self._log(
+                    f"  ↳ Auto: střed objektu X={cx} Y={cy}, STL={stl}", "muted"
+                )
 
     def _pick_models_dir(self):
         path = filedialog.askdirectory(title=t("dlg_models"))
